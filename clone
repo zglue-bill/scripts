@@ -1,0 +1,255 @@
+#!/bin/bash
+
+ASTYLE_CO="svn checkout https://svn.code.sf.net/p/astyle/code/trunk astyle-code"
+ZGLUE_BILL_HOST=git@github.com/zglue-bill
+GIT_UNAME=bill
+GERRIT_HOST=101.132.142.37
+GERRIT_SSH_PORT=30149
+GERRIT_HTTP_PORT=14586
+GERRIT_HOST_URL="$GIT_UNAME@$GERRIT_HOST:$GERRIT_SSH_PORT"
+GITHUB_HOST_URL="https://github.com/andre-simon/highlight.git"
+BITBUCKET_URL="https://bitbucket.org"
+SDK_13="SDK_13.0.0-1"
+SDK_13_1="SDK_13.1.0"
+SDK_14="SDK_14.0.0"
+DIALOG_SDK=dialog_585_sdk_dev
+
+declare -A Repo2Host
+declare -A RepoRename
+
+RepoRename["fast"]=fast_api
+RepoRename["NuttX"]=bknuttx
+RepoRename["AppsX"]=bkapps
+RepoRename["tools"]=bktools
+RepoRename["riot"]=RIOT
+RepoRename["apps"]=nuttx_apps
+RepoRename["dialog"]=dialog_585_sdk_dev@3rd_Party_SDK
+RepoRename["dallas"]=dialog_585_sdk_dev@3rd_Party_SDK
+RepoRename["nordic"]=SDK_13.0.0-1@3rd_Party_SDK
+RepoRename["sdk_13_1"]=SDK_13.1.0@3rd_Party_SDK
+RepoRename["sdk_14"]=SDK_14.0.0@3rd_Party_SDK
+
+Repo2Host["micro-ecc"]=master@git@github.com/kmackay/micro-ecc.git
+Repo2Host["zephyr"]=master@git@github.com/zephyrproject-rtos/zephyr.git
+Repo2Host["RIOT"]=master@github.com/RIOT-OS
+Repo2Host["bknuttx"]=master@${BITBUCKET_URL}/nuttx/nuttx.git
+Repo2Host["bktools"]=master@${BITBUCKET_URL}/nuttx/tools.git
+Repo2Host["bkapps"]=master@${BITBUCKET_URL}/nuttx/apps.git
+Repo2Host["fw_devtools"]=master@$ZGLUE_BILL_HOST/fw_devtools.git
+Repo2Host["home-env"]=master@$ZGLUE_BILL_HOST/home-env.git
+Repo2Host["nuttx-local"]=zdk@$ZGLUE_BILL_HOST/nuttx-local.git
+Repo2Host["apps-local"]=zdk@$ZGLUE_BILL_HOST/apps-local.git
+
+#
+# Table of color codes for vt100.  To be imported
+# into any shell script wanting to display color
+#
+
+#
+#
+# Simple color names are setting the forground color.
+#
+# Weird names are setting the forground to the first
+# part of the name and the background to the second.
+#
+# E.G.  REDBLK == Red lettering on a black background
+#       regardless of terminal settings.
+#
+# E.G.  YLWLtBLU == Yellow lettering on a light blue background.
+#
+# shellcheck disable=2034
+RED='\033[1;31m'
+# shellcheck disable=2034
+REDBLK='\033[1;31;40m'
+# shellcheck disable=2034
+REDYLW='\033[1;31;43m'
+# shellcheck disable=2034
+REDBLU='\033[1;31;46m'
+# shellcheck disable=2034
+GREEN='\033[1;32m'
+# shellcheck disable=2034
+GRNBLK='\033[1;32;40m'
+# shellcheck disable=2034
+GRNGRN='\033[1;32;42m'
+# shellcheck disable=2034
+YELLOW='\033[1;33m'
+# shellcheck disable=2034
+YLWBLK='\033[1;33;40m'
+# shellcheck disable=2034
+YLWRED='\033[1;33;41m'
+# shellcheck disable=2034
+YLWGRN='\033[1;33;42m'
+# shellcheck disable=2034
+YLWBLU='\033[1;33;44m'
+# shellcheck disable=2034
+YLWltBLU='\033[1;33;46m'
+# shellcheck disable=2034
+BLUE='\033[1;34m'
+# shellcheck disable=2034
+RESET='\033[0;39;49m'
+
+function help()
+{
+        sed -n -e '/^#Help/,/^#Help/p' "$0" | grep ')'
+}
+
+#
+# Setup the repo table with a repo host url
+#
+function init_repo_table()
+{
+        local repo_host_url=
+
+        [ -z "$1" ] && return 1
+        repo_host_url="$1"; shift
+        [ -n "$DEBUG" ] && echo "repo_host_url ($repo_host_url)" >&2
+	Repo2Host["fast_api"]=fast_api_dev@$repo_host_url/fast_api
+	Repo2Host["sdk_13"]=$SDK_13@$repo_host_url/3rd_Party_SDK
+	Repo2Host["sdk_14"]=$SDK_14@$repo_host_url/3rd_Party_SDK
+	Repo2Host["nordic"]=$SDK_13_1@$repo_host_url/3rd_Party_SDK
+	Repo2Host["dialog"]=$DIALOG_SDK@$repo_host_url/3rd_Party_SDK
+	Repo2Host["nuttx"]=zdk@$repo_host_url/nuttx.git
+	Repo2Host["nuttx_apps"]=zdk@$repo_host_url/nuttx_apps.git
+	Repo2Host["apps"]=zdk@$repo_host_url/nuttx_apps.git
+	Repo2Host["auto_test"]=master@$repo_host_url/auto_test.git
+	Repo2Host["3rd_Party_SDK"]=master@$repo_host_url/3rd_Party_SDK.git
+}
+
+#
+#
+#
+dump_Repo2Host()
+{
+        echo -e "\tRepo names to clone and their repo urls"
+        echo -e "\tFormat of repo url:  branch@name@url/x.git"
+        for key in ${!Repo2Host[@]} ; do
+                echo -e "Repo: ${YELLOW}$key\t\t${BLUE}${Repo2Host[$key]}${RESET}"
+        done
+        echo -e "\t\tAliases"
+        for key in ${!RepoRename[@]} ; do
+#               re_key="${RepoRename[$key]}"
+#               re_key=${re_key##*@}
+                for="${RepoRename[$key]}"
+                echo -e "alias: ${GREEN}$key\t\t${YELLOW}${for#*@}${RESET}"
+#               echo "key: $key, re_key $re_key"
+#               echo -e "alias: $key\t\t${Repo2Host[$re_key]}"
+        done
+}
+
+KEYS="sdk_13 sdk_14 nordic dialog nuttx nuttx_apps apps auto_test 3rd_Party_SDK"
+#
+# Quick writeup of what keywords map to what repos.
+#
+info()
+{
+        echo -e "\tKeyword\t\tRepo\t\tBranch"
+        echo -e "\t3rd_Party_SDK\t3rd_Party_SDK :: master"
+        echo -e "\tnordic\t\t3rd_Party_SDK :: SDK_13.1.0"
+        echo -e "\tsdk_13_1\t3rd_Party_SDK :: SDK_13.1.0"
+        echo -e "\tsdk_13\t\t3rd_Party_SDK :: SDK_13.0.0-1"
+        echo -e "\tsdk_14\t\t3rd_Party_SDK :: SDK_14.0.0"
+        echo ""
+        echo -e "\tdallas\t\t3rd_Party_SDK :: dialog_585_sdk_dev"
+        echo ""
+        echo -e "\tapps\t\tnuttx_apps :: zdk"
+        echo -e "\tnuttx_apps\tnuttx_apps :: zdk"
+        echo -e "\tnuttx\t\tnuttx :: zdk"
+        echo -e "\tbknuttx\t\toffcial nuttx :: master"
+        echo -e "\tauto_test\tauto_test :: master"
+}
+
+#
+# Fill in the GERRIT_* variables using the current repo's info.
+#
+setup_GERRIT_vars()
+{
+        GERRIT_UNAME="$(git config --local gitreview.username)"
+        GERRIT_HOST="$(git config --local gitreview.host)"
+}
+
+#
+# Setup remotes so that one points to gerrit and the other
+# points to git-hub.  The idea is to develop with git-hub
+# updating along the way from gerrit, and then push to gerrit
+# when ready.
+#
+# reset_remotes()
+# {
+# }
+
+#
+# Given a keyword or hint from the user find the branch,
+# repo, and URI associated and clone.
+#
+function clone()
+{
+        local CMD=
+        local Proto=
+        local Branch=
+        local Uri=
+        local Key=
+        local RepoName=
+
+        [ -z "$1" ] && return 1
+        Key=${1%%.git}
+        echo -n "Key: (${Key})"
+        if [ "${Key}" = "astyle" ] ; then
+                $ASTYLE_CO
+                return
+        fi
+        [ -n "${RepoRename[$Key]}" ] && Key=${RepoRename[$Key]}
+        if [ "${Key%%@*}" != "${Key}" ] ; then
+                Branch=${Key##@*}
+                RepoName=${Key##*@}
+        else
+                Branch=${Repo2Host[$Key]}
+        fi
+        echo "   Key: (${Key})"
+        Proto=ssh
+        Branch=${Branch%%@*}
+        Uri=${Repo2Host[$Key]}
+        Uri=${Uri#*@}
+        tmp="${Uri#*://}"
+        [ "$tmp" != "${Uri}" ] && Proto="${Uri%://*}"
+        Uri="${Uri#*://}"
+        [ -z "$Proto" ] && Proto=ssh
+        CMD="git clone -b $Branch $Proto://$Uri"
+        echo "$CMD"
+        $CMD
+}
+
+dual_source_repos()
+{
+        git remote rename origin gerrit
+        git remote add github ssh://git@github.com/zglue-bill
+}
+
+SRC_REPO_URL="$GERRIT_HOST_URL"
+[ "$#" -eq 0 ] && help && exit 1
+#Help
+while [ $# -ne 0 ] ; do
+        case "$1" in
+        -p | --print) PRINT=YES  # Print the set of repos and names.
+                ;;
+        -h | --help) help; exit
+                ;;
+        -R | --repo ) SRC_REPO_URL="$2"; shift # set the repo to init with.
+                ;;
+        -O | --no-origin)
+                     CONFIG_TWO_REPOS="dual_source_repo" # TBD
+                ;;
+        *) TARGET="$1"; # The repo name to clone.
+                ;;
+        esac
+        shift
+done
+#Help
+
+if ! init_repo_table $SRC_REPO_URL ; then
+        exit 1
+fi
+[ "$PRINT" = "YES" ] && dump_Repo2Host && exit 0
+
+clone $TARGET
+$CONFIG_TWO_REPOS
+

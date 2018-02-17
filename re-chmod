@@ -1,0 +1,270 @@
+#!/bin/bash
+
+# [ "$DEBUG" = "1" ] && ECHO="echo" && STDERR='>&2' && echo "ECHO ($ECHO), STDERR ($STDERR)" >&2
+[ "$TRACE" = "1" ] && set -x && echo "Set -x"
+
+#
+# Filter out everything but the while loop and the two boundary markers.
+# Then filter out anything that does not have a ')' in it.  Voila, instant
+# help message!
+#
+help_all()
+{
+
+        sed -n -e '/^### HELP.*start/,/^### HELP.*end/p' "$0" |
+               sed -e '/^### HELP/,/case/d' -e '/esac/,/^### HELP/d' -e '/;;/d'
+}
+
+help_msg()
+{
+        cat <<"EOF"
+        re-chmod [-h | -c | -x ]
+        -c:  Run commit as well as git add.
+        -h:  help_msg (the message you're, hopefully, reading)
+        -x:  Remove the -x permissions from files in nrf52 directories.
+EOF
+        [ "$1" != "dev" ] && return
+        echo "================================================================"
+        help_all
+}
+
+#
+# Set DEBUG dependent vars
+#
+dbg_set()
+{
+        local tmp=
+
+        [ -z "$1" ] && return
+        tmp=$(echo "$1" | tr -d  [0-9])
+        [ -n "$tmp" ] && echo "Digits only please." >&2 && return
+        [ "$1" -lt 1 ] || [ "$1" -gt 9 ] && return
+        ECHO="echo"
+        STDERR='>^2'
+        DEBUG="$tmp"
+}
+
+[ $# -eq 0 ] && help_msg && exit
+
+dbg_set "$DEBUG"
+
+#
+# Shortcut to send output to stderr by default.
+#
+echo_dbg()
+{
+        [ "$DEBUG" != "1" ] && return
+
+        local i=
+        local tmpe=
+        declare -a tmp=
+
+        #
+        # If the first character in $@ is a ':' then treat $@ as a string.
+        #
+        tmp=( "$@" )
+        echo "${tmp[@]}" >&2
+}
+
+#
+# Use the output of git status to create a set of files to process.
+#
+git_committed()
+{
+        local IFS=
+        local Filter1=
+        local Filter2=
+
+        [ "$1" = "unstaged" ] && IFS=" " && echo_dbg ":Setting IFS to a space"
+        Filter1="'/^${IFS}[AMC]/p'"
+        Filter2="'/^${IFS}[R]/p'"
+        git status -uno --porcelain=v1 | eval sed -n -e "$Filter1" -e "$Filter2" | \
+                awk '{print $NF}'
+}
+
+#
+# General purpose for loop.
+#
+# Arg1 : command to run on each loop
+# Arg* : list of files to process
+#
+do_for()
+{
+        set -x
+        local Cmd=
+        declare -a List=
+        local var=
+
+        Cmd="$1" ; shift
+        List=( "$@" )
+
+        echo "$Cmd" >&2
+        for var in "${List[@]}" ; do
+                eval $ECHO $Cmd $var
+        done
+        set +x
+}
+
+#
+# Check each file found having the executable permissions
+# and verify that they no longer have executable permissions.
+#
+# Output any failures.
+#
+verify_no_exec()
+{
+        local Files=
+        local file=
+
+        Files=( "$@" )
+        for file in "${Files[@]}" ; do
+                if [ -x "$file" ] ; then
+                        Rv=$(( Rv + 1 ))
+                        echo -n "$file"
+                        echo -n -e "  "
+                        [ "$DEBUG" = "2" ] && echo "===!! ($file)" >&2
+                fi
+        done
+}
+
+#
+# back out the chmods by git reset followed by git checkout .
+#
+restore_repo()
+{
+        local Msg=
+
+        [ -z "$(git status -uno --porcelain)" ] && echo "Tree is already clean." >&2 && return
+        Msg="$@"
+        HEAD=HEAD
+        if [ "$#" -eq 1 ] ; then
+                HEAD="$1"
+        fi
+        echo "Resetting your work space to $HEAD:"
+        git reset --hard $HEAD
+        git checkout .
+}
+
+find_all_files()
+{
+        local Flag=
+
+        Flag="$1"
+        if [  "$Flag" != "all" ] ; then
+                $(verify_no_exec $(git_committed) $(git_committed unstaged))
+                return
+        fi
+        find_all_executable_files "./"
+}
+
+# arch/arm/src/nrf52 configs/nrf52832_dk arch/arm/include/nrf52
+#
+# Find every file in the tree that is executable but probalby shouldn't be.
+#
+find_all_executable_files()
+{
+        declare -a Dirs=
+
+        [ "$#" -eq 0 ] && echo "Need a directory to start from." >&2 && return 1
+        Dirs=( $@ )
+find "${Dirs[@]}" -type f -executable | while read badperms; do
+        if [ -z "$(file -b $badperms | grep -v executable)" ] ; then
+                [ "$VERBOSE" = "1" ] && echo "continure for executable $badperms" >&2
+                continue
+        fi
+        if [ -z "${badperms##*.sh}" ] || [ -z "${badperms##*.bat}" ] || [ -z "${badperms##*.pl}" ] || [ -z "${badperms##*.py}" ] ;\
+        then
+                [ "$VERBOSE" = "1" ] && echo "continure for script $badperms" >&2
+                continue
+        fi
+        echo -n $badperms
+        # add space between files
+        echo "  "
+done
+}
+
+find_executable_files()
+{
+        local Flag=
+
+        Flag="$1"
+
+        if [ "$Flag" != "all" ] ; then
+                do_for '[ -x $var ] && echo' $(git_committed) $(git_committed unstaged)
+                return
+        else
+                find_all_files
+        fi
+}
+
+COMMIT_MSG="\"  Remove __X__X__X perm bit from source files.\""
+
+### HELP message start
+while [ $# -gt 0 ] ; do
+        case "$1" in
+        -a) DO_FIX='git add ${GIT_ADD_FILES[@]}'
+            ALL=all
+        ;;
+        -c) DO_COMMIT='git commit -m $(echo $COMMIT_MSG)'
+            DO_FIX='git add ${GIT_ADD_FILES[@]}'
+        ;;
+        -d*) [ -n "$(echo "${1#-}" | tr -d d)" ] && echo "What is this? [$1]" >&2 && exit 1
+             tmp=${1#-}
+             DEBUG=${#tmp}
+             echo_dbg "DEBUG is set to [$DEBUG]"
+             dbg_set "$DEBUG"
+        ;;
+        -h) help_msg
+            exit
+        ;;
+        -hh) help_msg dev
+            exit
+        ;;
+        -l) GIT_ADD_FILES=( $(find_all_executable_files "$ALL" "./" ) )
+            if [ -z "${GIT_ADD_FILES[*]}" ] ; then
+                echo "No executable source or text files found."
+            else
+                echo "${GIT_ADD_FILES[@]}"
+            fi
+            exit
+        ;;
+        -r*) tmp=${1#-} && [ -n "$(echo $tmp | tr -d r)" ] && echo "Huh?" >&2 && exit 1
+            tmp=$(( ${#tmp} - 1 ))
+            [ "$tmp" -gt 0 ] && HEAD="HEAD~$tmp"
+            restore_repo "$HEAD"
+           exit
+        ;;
+        -s) git status
+           exit
+        ;;
+        -t) TRACE=1
+            set -x
+        ;;
+        -x) DO_FIX='git add ${GIT_ADD_FILES[@]}'
+        ;;
+        *) echo "What is this: [$1]?" >&2
+           help_msg
+           exit 1
+        ;;
+        esac
+        shift
+done
+### HELP message end
+
+# echo "GIT_ADD_FILES:  ($GIT_ADD_FILES)"
+GIT_ADD_FILES=( $(find_executable_files "$ALL" ) )
+echo "(${GIT_ADD_FILES[*]})" >&2
+
+[ -z "${GIT_ADD_FILES[*]}" ] && echo "Nothing to chmod" >&2 && exit
+
+[ "$DEBUG" = "1" ] && echo "Files to be added: ${#GIT_ADD_FILES[@]}" >&2
+
+do_for "$ECHO chmod -x" "${GIT_ADD_FILES[@]}"
+
+BADFILES=$(verify_no_exec ${GIT_ADD_FILES[@]})
+# verify_no_exec $GIT_ADD_FILES
+[ -n "$BADFILES" ] && [ "$DEBUG" = "1" ] && echo ":: Files remaining unmodified: ($BADFILES)"
+
+eval $ECHO $DO_FIX
+$ECHO $DO_COMMIT
+
